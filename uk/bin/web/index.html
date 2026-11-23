@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>BLUFF &amp; BUZZ</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div id="app" class="app-container">
+        <!-- Top Persistent Navigation / Status Bar -->
+        <header class="top-nav">
+            <div class="brand">
+                <span class="brand-icon">🎮</span>
+                <span class="brand-name">BLUFF <span class="accent-text">&amp;</span> BUZZ</span>
+            </div>
+            <div class="nav-right">
+                <div id="roomPill" class="room-pill hidden">
+                    <span class="room-label">ROOM:</span>
+                    <span id="roomCodeDisplay" class="room-code">----</span>
+                    <button id="copyRoomBtn" class="icon-btn" title="Copy Invite Link">📋</button>
+                </div>
+                <div id="connectionStatus" class="status-pill status-disconnected">
+                    <span class="status-dot"></span>
+                    <span id="statusText">Connecting...</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content View Area -->
+        <main class="main-content">
+            <!-- 1. CONNECT / LOBBY SCREEN -->
+            <section id="screenLobby" class="view-screen active">
+                <div class="hero-section">
+                    <h1 class="hero-title">BLUFF <span class="neon-glow">&amp;</span> BUZZ</h1>
+                    <p class="hero-subtitle">Reflex Trivia • AI Lie-Detector Bluffing • High-Stakes Risk</p>
+                </div>
+
+                <div class="cards-grid">
+                    <!-- Share URL Banner -->
+                    <div id="shareUrlBanner" class="cyber-card share-banner-card" style="grid-column:1/-1;display:flex;align-items:center;gap:1rem;padding:1rem 1.4rem;">
+                        <span style="font-size:1.5rem;">📡</span>
+                        <div style="flex:1;min-width:0;">
+                            <div style="font-size:.7rem;color:var(--text-dim);letter-spacing:.08em;text-transform:uppercase;margin-bottom:.2rem;">Share this URL with friends on the same Wi-Fi</div>
+                            <div id="shareUrlText" style="font-family:'JetBrains Mono',monospace;font-size:.95rem;color:var(--accent-cyan);word-break:break-all;cursor:pointer;" title="Click to copy">Loading...</div>
+                        </div>
+                        <button onclick="copyShareUrl()" class="btn btn-secondary btn-sm" style="white-space:nowrap;">📋 Copy</button>
+                    </div>
+                    <!-- Host Card -->
+                    <div class="cyber-card host-card">
+                        <div class="card-header">
+                            <span class="card-icon">👑</span>
+                            <h2>Host Game</h2>
+                        </div>
+                        <p class="card-desc">Create a new party session and invite friends via link or QR!</p>
+                        <div class="input-group">
+                            <label for="hostName">Your Name</label>
+                            <input type="text" id="hostName" placeholder="e.g. Master Host" maxlength="15" value="Host">
+                        </div>
+                        <button id="btnHost" class="btn btn-yellow btn-large">
+                            <span>Create Session [Host]</span>
+                            <span class="btn-arrow">→</span>
+                        </button>
+                    </div>
+
+                    <!-- Join Card -->
+                    <div class="cyber-card join-card">
+                        <div class="card-header">
+                            <span class="card-icon">⚡</span>
+                            <h2>Join Game</h2>
+                        </div>
+                        <p class="card-desc">Enter 4-letter room code to jump straight into the action!</p>
+                        <div class="input-group">
+                            <label for="joinName">Your Name</label>
+                            <input type="text" id="joinName" placeholder="e.g. Player 2" maxlength="15" value="Player">
+                        </div>
+                        <div class="input-group">
+                            <label for="joinRoom">Room Code</label>
+                            <input type="text" id="joinRoom" placeholder="e.g. SHOW" maxlength="6" class="code-input">
+                        </div>
+                        <button id="btnJoin" class="btn btn-cyan btn-large">
+                            <span>Join Game [Play]</span>
+                            <span class="btn-arrow">→</span>
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 2. WAITING ROOM SCREEN -->
+            <section id="screenWaiting" class="view-screen">
+                <div class="waiting-header">
+                    <div class="waiting-title-box">
+                        <span class="badge-label">SESSION CODE</span>
+                        <div class="session-code-giant" id="waitingSessionCode">----</div>
+                        <button id="btnCopyInvite" class="btn btn-secondary btn-sm">📋 Copy Invite Link</button>
+                    </div>
+
+                    <!-- QR Code Card -->
+                    <div class="qr-container">
+                        <img id="qrImage" src="" alt="Scan QR Code to Join" class="qr-code-img">
+                        <div class="qr-caption">Scan phone camera to join!</div>
+                    </div>
+                </div>
+
+                <div class="waiting-arena">
+                    <div class="arena-title-bar">
+                        <h3>Lobby Players (<span id="waitingPlayerCount">1</span> / 4)</h3>
+                        <span class="arena-subtitle">4-Player Square Arena</span>
+                    </div>
+
+                    <div id="playerSlotsGrid" class="player-slots-grid">
+                        <!-- Populated dynamically: 4 player badges -->
+                    </div>
+                </div>
+
+                <div class="waiting-footer">
+                    <div id="waitingStatusMsg" class="status-banner">Waiting for host to launch...</div>
+                    <button id="btnStartGame" class="btn btn-emerald btn-giant hidden">
+                        <span>Start Game [Launch Showdown]</span>
+                        <span class="btn-arrow">🚀</span>
+                    </button>
+                </div>
+            </section>
+
+            <!-- 3. ROUND 1: REFLEX BUZZER SPRINT -->
+            <section id="screenRound1" class="view-screen">
+                <div class="round-header">
+                    <div class="round-meta">
+                        <span class="round-tag">ROUND 1</span>
+                        <span id="r1Category" class="category-pill">GENERAL KNOWLEDGE</span>
+                        <span id="r1QuestionIndex" class="q-progress-pill">Q 1/3</span>
+                    </div>
+                    <div class="timer-box">
+                        <span id="r1TimerText" class="timer-digits">20s</span>
+                        <div class="timer-bar-track">
+                            <div id="r1TimerBar" class="timer-bar-fill"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="question-container">
+                    <h2 id="r1Prompt" class="question-prompt">Loading question...</h2>
+                </div>
+
+                <!-- Buzzer Area -->
+                <div id="r1BuzzerArea" class="buzzer-container">
+                    <button id="bigBuzzerBtn" class="giant-buzzer-btn">
+                        <span class="buzzer-surface">
+                            <span class="buzzer-icon">⚡</span>
+                            <span class="buzzer-text">BUZZ!</span>
+                        </span>
+                        <span class="buzzer-ring"></span>
+                    </button>
+                    <div id="buzzerStatusMsg" class="buzzer-status">SLAM THE BUZZER FIRST TO ANSWER!</div>
+                </div>
+
+                <!-- Answer Options (Revealed when player buzzed or spectating) -->
+                <div id="r1OptionsArea" class="options-container hidden">
+                    <div class="options-grid" id="r1OptionsGrid">
+                        <!-- 4 options dynamically injected -->
+                    </div>
+                </div>
+            </section>
+
+            <!-- 4. ROUND 2: BLUFF & AI LIE-DETECTOR -->
+            <section id="screenRound2" class="view-screen">
+                <div class="round-header">
+                    <div class="round-meta">
+                        <span class="round-tag r2-tag">ROUND 2</span>
+                        <span id="r2Category" class="category-pill">WEIRD FACTS</span>
+                        <span id="r2PhaseBadge" class="phase-pill">PHASE: WRITE BLUFF</span>
+                    </div>
+                    <div class="timer-box">
+                        <span id="r2TimerText" class="timer-digits">35s</span>
+                        <div class="timer-bar-track">
+                            <div id="r2TimerBar" class="timer-bar-fill fill-r2"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="question-container">
+                    <div class="r2-fact-card">
+                        <div class="fact-tag">FILL IN THE BLANK</div>
+                        <h2 id="r2Prompt" class="question-prompt">Loading historical fact...</h2>
+                    </div>
+                </div>
+
+                <!-- Phase 2A: Bluff Writing -->
+                <div id="r2WriteArea" class="r2-phase-box active">
+                    <div class="bluff-input-container">
+                        <input type="text" id="bluffInput" placeholder="Invent a believable fake answer..." autocomplete="off">
+                        <button id="btnSubmitBluff" class="btn btn-yellow btn-large">Lock In My Bluff [Submit]</button>
+                    </div>
+
+                    <!-- Live AI Keystroke Biometric Analyzer -->
+                    <div class="ai-detector-hud">
+                        <div class="hud-header">
+                            <span class="hud-icon">🧠</span>
+                            <span class="hud-title">AI LIE-DETECTOR BIOMETRIC ANALYZER</span>
+                        </div>
+                        <div class="hud-metrics">
+                            <div class="hud-metric">
+                                <span class="metric-label">Hesitation:</span>
+                                <span id="r2HesitationVal" class="metric-value">0.0s</span>
+                            </div>
+                            <div class="hud-metric">
+                                <span class="metric-label">Backspaces:</span>
+                                <span id="r2BackspaceVal" class="metric-value">0</span>
+                            </div>
+                            <div class="hud-metric">
+                                <span class="metric-label">AI Risk:</span>
+                                <span id="r2RiskBadge" class="risk-badge risk-low">30% Low</span>
+                            </div>
+                        </div>
+                        <div class="risk-meter-track">
+                            <div id="r2RiskMeter" class="risk-meter-fill" style="width: 30%"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Phase 2B: Voting Grid -->
+                <div id="r2VoteArea" class="r2-phase-box hidden">
+                    <div class="vote-instructions">Choose the answer you believe is the GENUINE TRUTH:</div>
+                    <div id="r2VoteGrid" class="vote-grid">
+                        <!-- Dynamically filled options with AI risk tags -->
+                    </div>
+                </div>
+
+                <!-- Phase 2C: Reveal Breakdown -->
+                <div id="r2RevealArea" class="r2-phase-box hidden">
+                    <div class="reveal-card">
+                        <span class="reveal-label">THE GENUINE TRUTH WAS:</span>
+                        <h3 id="r2RealAnswerText" class="real-answer-text">Answer</h3>
+                        <div id="r2ScoresSummary" class="reveal-summary"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 5. ROUND 3: ALL-IN RISK WAGER -->
+            <section id="screenRound3" class="view-screen">
+                <div class="round-header">
+                    <div class="round-meta">
+                        <span class="round-tag r3-tag">ROUND 3</span>
+                        <span id="r3Category" class="category-pill">HIGH-STAKES SHOWDOWN</span>
+                        <span id="r3PhaseBadge" class="phase-pill">PHASE: SECRET WAGER</span>
+                    </div>
+                    <div class="timer-box">
+                        <span id="r3TimerText" class="timer-digits">20s</span>
+                        <div class="timer-bar-track">
+                            <div id="r3TimerBar" class="timer-bar-fill fill-r3"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Phase 3A: Secret Wager Slider -->
+                <div id="r3WagerArea" class="r3-phase-box active">
+                    <div class="wager-card">
+                        <h2 class="wager-headline">PLACE YOUR SECRET WAGER</h2>
+                        <p class="wager-sub">Category: <strong id="r3WagerCategory" class="accent-text">???</strong></p>
+                        
+                        <div class="wager-value-display">
+                            <span id="wagerAmountDisplay" class="wager-big-number">500</span>
+                            <span class="wager-unit">PTS</span>
+                        </div>
+
+                        <div class="wager-slider-wrap">
+                            <input type="range" id="wagerSlider" min="100" max="2000" step="50" value="500">
+                            <div class="slider-labels">
+                                <span id="wagerMinLabel">100 pts</span>
+                                <span id="wagerMaxLabel">Max</span>
+                            </div>
+                        </div>
+
+                        <button id="btnLockWager" class="btn btn-yellow btn-large">Lock In Secret Wager</button>
+                    </div>
+                </div>
+
+                <!-- Phase 3B: Wager Question -->
+                <div id="r3QuestionArea" class="r3-phase-box hidden">
+                    <div class="question-container">
+                        <h2 id="r3Prompt" class="question-prompt">Loading final question...</h2>
+                    </div>
+                    <div id="r3OptionsGrid" class="options-grid">
+                        <!-- Final 4 options -->
+                    </div>
+                </div>
+
+                <!-- Phase 3C: Reveal -->
+                <div id="r3RevealArea" class="r3-phase-box hidden">
+                    <div class="reveal-card">
+                        <span class="reveal-label">CORRECT FINAL ANSWER:</span>
+                        <h3 id="r3RealAnswerText" class="real-answer-text">Answer</h3>
+                        <div id="r3WagerSummary" class="reveal-summary"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 6. FINAL LEADERBOARD & PODIUM -->
+            <section id="screenLeaderboard" class="view-screen">
+                <div class="victory-header">
+                    <div class="crown-icon">👑</div>
+                    <h1 class="victory-title">SHOWDOWN CHAMPION</h1>
+                    <div id="winnerCrownName" class="winner-name">CHAMPION</div>
+                </div>
+
+                <div class="podium-section">
+                    <div class="podium-grid" id="podiumGrid">
+                        <!-- 1st, 2nd, 3rd podium pedestals -->
+                    </div>
+                </div>
+
+                <div class="leaderboard-split">
+                    <div class="leaderboard-card">
+                        <h3>Match Rankings</h3>
+                        <div id="matchRankingsList" class="rankings-list"></div>
+                    </div>
+                </div>
+
+                <div class="leaderboard-footer">
+                    <button id="btnReturnLobby" class="btn btn-cyan btn-large">Return to Lobby [Play Again]</button>
+                </div>
+            </section>
+        </main>
+
+        <!-- Floating Live Score Notifications -->
+        <div id="toastContainer" class="toast-container"></div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
+
+
