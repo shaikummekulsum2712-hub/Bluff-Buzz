@@ -1,306 +1,131 @@
-BLUFF & BUZZ — Complete Project Guide
-BLUFF & BUZZ is a 4-player party game written in plain Java: one server, browser and desktop clients, an SQLite question bank, and bots that fill empty seats. This guide explains every part so you can run it, explain it and answer questions about it.
-The game in one minute
-Up to 4 players start with 1,000 points each and play three rounds; the highest score at the end wins. The host creates a room with a 4-character code, friends join by code, link or QR scan, and bots fill any empty seats.
-1.  Round 1 — Reflex Buzzer (3 questions): everyone sees a trivia question and a big BUZZ button. The first to buzz gets to pick an answer from 4 options. Right: +500. Wrong: −200, and the buzzer reopens for the others.
-2.  Round 2 — Bluff (2 questions): a fact with a blank, such as "A day on Venus is longer than its _____". Each player secretly writes a believable fake answer. Then everyone sees all fakes plus the real answer from the database, and votes for the one they think is true.
-3.  Round 3 — Final Wager (1 question): only the category is shown first. Each player secretly bets points, then answers a 4-option question. Right: +bet. Wrong: −bet.
-When the last round ends, the server sorts players by score, saves the real players (not bots) to the leaderboard table, and shows the podium.
-Architecture at a glance
-Browsers and desktop clients enter through two doors, but both feed the same GameSession, which reads questions from SQLite and saves scores back at the end. The web door is the WebServer; the desktop door is the GameServer itself.
-Folder map
-Everything lives under uk/. The Java package is com.fibbage (the old project name; it is invisible to players and was left alone).
-Path
-What it does
-src/com/fibbage/model/
-Game data and rules: Player, HumanPlayer, AIPlayer, Question, GameConstants, and the round classes GameRound, RapidFireRound, BluffRound, FinalWagerRound
-src/com/fibbage/db/DatabaseManager.java
-All SQLite / JDBC work: create tables, load questions, pick random questions, save and read scores
-src/com/fibbage/concurrency/
-BuzzerController (who buzzed first) and RoundTimer (countdowns)
-src/com/fibbage/network/GameServer.java
-The brain: accepts connections, owns sessions, runs every round (about 1,000 lines)
-src/com/fibbage/network/ClientHandler.java
-One thread per desktop (TCP) client; reads lines and passes them to GameServer
-src/com/fibbage/network/WebServer.java + WebSocketClientHandler.java
-Hand-written HTTP server and WebSocket (RFC 6455) so phones and browsers can play
-src/com/fibbage/network/NetworkProtocol.java
-Names of all commands and events, and the :: delimiter
-src/com/fibbage/network/NetworkUtils.java
-Finds the PC's Wi-Fi/LAN IP and builds the join URL
-src/com/fibbage/network/QRCodeGenerator.java
-QR encoder written from scratch, no libraries
-src/com/fibbage/network/GameClient.java
-The desktop client's connection; turns server messages into Swing callbacks
-src/com/fibbage/ai/AILieDetector.java
-Computes the "bluff risk %" shown beside answers
-src/com/fibbage/ui/
-Swing desktop GUI: MainFrame, LobbyPanel, Round1/2/3 panels, LeaderboardPanel, PlayerSquareWidget, UITheme
-web/
-The browser client: index.html, style.css, app.js
-lib/
-sqlite-jdbc.jar plus two slf4j jars the driver needs
-bin/
-Compiled classes and a copy of web/ (what the .bat files run)
-game.db
-The SQLite file; created in the folder you launch from
-build.bat, run_server.bat, run_game.bat, test_blocks.bat
-Compile, start the server, start the desktop GUI, run the self-tests
-Block 1 — The four OOP pillars
-The model package is the classroom example of object-oriented design. Know each pillar and the exact class that shows it.
-Pillar
-Where
-How it shows up
-Encapsulation
-Player
-Fields (score, wager, lockedOut, bluff data) are private. Setters validate: setScore never lets the score go below 0; setWager clamps the bet between 100 and the current score.
-Abstraction
-Player, GameRound
-Both are abstract. Player declares isAI(); GameRound declares calculatePoints(boolean, int). They define a contract without saying how it is done.
-Inheritance
-HumanPlayer, AIPlayer extend Player; RapidFireRound, BluffRound, FinalWagerRound extend GameRound
-Subclasses reuse the parent's fields and methods and add their own (HumanPlayer.clientId, AIPlayer.generateFakeAnswer()).
-Polymorphism
-calculatePoints
-Each round overrides it with its own scoring. The server calls round.calculatePoints(...) on a GameRound and the right rule runs.
-The three scoring overrides:
-• RapidFireRound: correct +500; wrong −200; extraData == -1 means nobody buzzed, −50.
-• BluffRound: if extraData > 0 it is the number of friends fooled, so +250 each; otherwise true answer +500, fake −200.
-• FinalWagerRound: correct returns +wager, wrong returns −wager.
-GameConstants holds every number (points, penalties, timers, ports) in one place, so tuning the game never means hunting through code. Question is a plain data class: prompt, category, correct answer, wrong options, and getAllOptionsShuffled().
-You can demonstrate this block alone: GameRound.java has a main method that prints each pillar, and test_blocks.bat runs it.
-Block 2 — JDBC and SQLite
-DatabaseManager talks to SQLite with plain JDBC (java.sql), no ORM. It is a singleton: DatabaseManager.getInstance() is synchronized, so only one instance ever exists. The connection string is jdbc:sqlite:game.db, which creates game.db in the folder you launch from.
-Two tables
-Table
-Columns
-questions
-id, round_type (RAPID_FIRE, BLUFF or WAGER), category, prompt, correct_answer, wrong_options (wrong answers joined by |)
-leaderboard
-id, player_name, score, played_at (timestamp, default now)
-What happens at start-up
-1.  initTables() runs CREATE TABLE IF NOT EXISTS for both tables.
-2.  seedDefaultQuestions() deletes every row in questions and re-inserts the 21 questions from the QUESTIONS array in the Java file (8 buzzer, 8 bluff, 5 wager) using a PreparedStatement batch. So to change the questions, edit that array, not the database file.
-3.  During a game, getRandomQuestions(roundType, limit) runs SELECT ... WHERE round_type = ? ORDER BY RANDOM() LIMIT ?.
-4.  At game end, saveScore(name, score) inserts a row for each human; getTopScores(limit) reads the best scores back with a ResultSet.
-Why it is written this way
-• PreparedStatement with ? placeholders stops SQL injection and handles quotes in text.
-• try-with-resources closes the connection, statement and result set automatically.
-• If the SQLite driver jar is missing, the constructor catches the error and switches to an in-memory copy of the same questions, so the game still runs (scores are then kept only in memory).
-For Round 2 only the prompt and the correct answer matter; the wrong_options text is ignored because the wrong choices are the players' own bluffs. The real answer shown in the vote list is the correct_answer column.
-Block 3 — Threads, locks and timers
-A game server is concurrent by nature: many players act at the same moment, and timers fire on their own threads. The code stays correct by following a few simple rules.
-BuzzerController — who buzzed first?
-• tryBuzz(name) is synchronized. If four phones press at the same millisecond, Java lets one thread in at a time; the first sets activeBuzzerPlayer, the rest see it is taken and get false.
-• It also refuses players who are locked out or when the buzzer is closed.
-• lockOutCurrentPlayer() adds the wrong buzzer to a locked-out set and clears the active buzzer, so the buzzer can reopen for the others.
-• resetForNewQuestion() clears everything. areAllPlayersLockedOut(n) tells the server when nobody is left.
-• Its main method starts four threads that buzz together and prints the single winner: this is the demo for the viva.
-RoundTimer — countdowns
-• Uses a ScheduledExecutorService with one daemon thread. Every second it decrements the time, calls the tick callback (which sends TIMER_TICK to all players) and at 0 calls the complete callback.
-• Each start() bumps a generation number. An old countdown that was stopped or replaced sees its number is stale and does nothing, so an old timer can never end a newer question early.
-GameSession — one lock for the whole game
-• Every method that changes game state is synchronized on the session. Timer callbacks, bot actions and player messages all queue on that one lock, so two things never change the state at once.
-• Each handler first checks the current phase (for example R2_VOTE). A late, early or duplicate message is simply ignored.
-• Pauses between questions use a shared ScheduledExecutorService (later(delay, task)) that takes the session lock before running.
-Thread-safe collections: sessions is a ConcurrentHashMap, client lists are CopyOnWriteArrayList (safe to loop over while players join or leave), and running flags are volatile.
-Block 4 — Sockets, WebSocket and the protocol
-Two doors into the same game
-Port
-Who connects
-How
-5000 (TCP)
-Java Swing desktop clients
-ServerSocket.accept() in GameServer, one ClientHandler thread per client, one text line per message
-8080 (HTTP + WebSocket)
-Browsers and phones
-WebServer serves the page and upgrades /ws to a WebSocket; each browser gets a WebSocketClientHandler
-WebSocketClientHandler extends ClientHandler, overriding only how bytes are read and written (it decodes and encodes RFC 6455 frames by hand: masking, 126/127 length forms, ping/pong, close). Because of that, GameServer treats a phone and a desktop client identically — this is inheritance and polymorphism at work.
-The text protocol
-Every message is plain text: a command or event name, then fields separated by ::. Lists inside a field use | between items, , between names and = between a name and a score. Player names and bluffs are cleaned: : | , = ~ are replaced by spaces, names are cut to 15 characters and bluffs to 40, so nobody can break a message.
-Client to server
-Example
-Meaning
-CREATE_SESSION
-CREATE_SESSION::Al
-Host makes a room
-JOIN_SESSION
-JOIN_SESSION::K7XZ::Bob
-Join by code
-START_GAME
+BLUFF & BUZZ
 
-Host only
-BUZZ / ANSWER_BUZZ
-ANSWER_BUZZ::Gold
-Round 1
-SUBMIT_BLUFF
-SUBMIT_BLUFF::Cow::3200::1
-Text, typing time (ms), backspaces
-SUBMIT_VOTE
-SUBMIT_VOTE::Year
-Round 2 vote
-SUBMIT_WAGER / SUBMIT_WAGER_ANSWER
-SUBMIT_WAGER::400
-Round 3
-Server to client
-Meaning
-SESSION_CREATED, LOBBY_UPDATE, GAME_STARTED, ROUND_STARTED
-Lobby and round changes
-TIMER_TICK
-Seconds left, every second
-ROUND1_QUESTION, BUZZ_LOCKED, BUZZ_REOPENED
-Round 1
-ROUND2_QUESTION, BLUFF_ACK, PLAYER_SUBMITTED, ROUND2_VOTE_OPTIONS, ROUND2_REVEAL
-Round 2
-ROUND3_CATEGORY, ROUND3_QUESTION, ROUND3_REVEAL
-Round 3
-SCORE_UPDATE, SCORES, GAME_OVER, ERROR
-Scores, end, problems
-The vote list format is text~risk~mine, items joined with |; for example Horse~25~0|Cow~58~1. mine=1 marks the bluff you wrote. The server sends each player their own copy of the list for that reason.
-Rooms: the code is 4 characters from ABCDEFGHJKLMNPQRSTUVWXYZ23456789 (no 0, O, 1 or I, which look alike) and is never reused while a room is live. A name already taken in a room is refused, and a started game refuses new joins.
-The game engine — GameSession
-GameServer.GameSession is one running game. It keeps the player list, the current question, the buzzer, the timer, and a phase string that says what the game is waiting for. The phases are: LOBBY, R1_BUZZ, R1_ANSWER, R1_WAIT, R2_WRITE, R2_VOTE, R2_REVEAL, R3_WAGER, R3_ANSWER, R3_REVEAL, DONE. A message is only accepted in the phase it belongs to.
-Round 2 step by step
-1.  sendNextRound2Question() sends the blank-fact prompt. Bots instantly add their fake answers.
-2.  Each human sends SUBMIT_BLUFF. The server rejects the true answer ("Too close to the truth!") and any text another player already used, then stores the bluff with its risk %.
-3.  When every connected human has submitted, or the 35-second timer ends, transitionToRound2Voting() runs. A player who wrote nothing gets an automatic "Mystery Option from <name>".
-4.  The server adds the real answer from the database, shuffles all entries, and sends each player the full list (your own bluff flagged).
-5.  Humans send SUBMIT_VOTE; bots vote randomly. You cannot vote for your own bluff.
-6.  revealRound2Results() scores the votes, sends the real answer and everyone's scores, waits 5 seconds, then moves on.
-Scoring reference
-Event
-Points
-Starting score
-1,000 (never below 0)
-R1 correct buzz
-+500
-R1 wrong buzz
-−200, you are locked out of that question and the buzzer reopens
-R1 nobody buzzes
-−50 for everyone
-R2 you vote for the real answer
-+500
-R2 you vote for someone's fake
-−200
-R2 someone votes for your fake
-+250 per voter
-R3 correct
-+bet
-R3 wrong
-−bet (bet is 100 up to your score, and never more than you have)
-Timers (seconds)
-Step
-Time
-R1 buzz window / answer / after a wrong buzz
-20 / 15 / 13
-R2 write / vote
-35 / 25
-R3 wager / answer
-20 / 25
-A round also ends early when every connected human has acted. The pause after each reveal is 3 seconds in Round 1 and 5 seconds in Rounds 2 and 3.
-Players who leave: in the lobby they simply disappear (the host crown passes on). After the game starts they stay in the game with their score and are skipped when the server decides whether everyone has answered, so one closed tab never freezes the others.
-Game over: finishGame() sorts by score, saves only humans to the leaderboard table, broadcasts GAME_OVER, frees the room code and stops the timer.
-Note: GameConstants.ROUND2_AI_FOOLED_BONUS exists but nothing uses it yet.
-Bots and the AI Lie-Detector
-Neither is machine learning. Both are small, rule-based pieces of code. Be honest about this if you are asked.
-The bots (AIPlayer)
-• When the host starts and fewer than 4 humans are in the room, the server adds Echo_AI, Pixel_AI, Nova_AI and Cipher_AI until there are 4 players.
-• Round 1: one random bot is scheduled to buzz 5 to 14 seconds after the question appears (only if no human has buzzed). After 2 seconds it answers correctly 55% of the time, otherwise picks a random wrong option.
-• Round 2: a bot writes by picking a random line from a fixed list of 8 silly answers ("A Dancing Bear", "A Golden Pocket Watch" ...), retrying so no two bluffs match. It votes randomly for any option except its own.
-• Round 3: bets about half its score (minimum 100) and answers at random.
-The Lie-Detector (AILieDetector.calculateBluffRisk)
-It turns how a bluff was typed into a risk number shown beside each option. Higher means "looks more like a bluff".
-Signal
-Effect on the risk
-Start value
-40
-0 backspaces
-−18
-1–2 backspaces
-+5
-3–5 backspaces
-+20
-6 or more
-+35
-More than 800 ms per character
-+18
-Under 250 ms per character (text longer than 5)
-−10
-Contains "goat", "donkey" or "bear"
-+8
-Small variation from the text hash
-−5 to +5
-The result is clamped to 10–92. The real answer gets a fixed low value between 12 and 35, so the truth tends to score low, and a sharp player could use that as a clue. The web page and the desktop panel show a live version of the same formula while you type, based on hesitation time and backspace count measured in the browser (keydown events).
-Clients — web app, desktop GUI and QR code
-Web app (web/)
-• index.html holds six screens (lobby, waiting room, Round 1, 2, 3, leaderboard); only one has the class active at a time. style.css is the dark neon theme; app.js is all the logic.
-• app.js opens a WebSocket to /ws, and processMessage() splits each message on :: and switches on the event name. Buttons send commands with ws.send(...).
-• On load it calls /api/info to learn the PC's LAN address, shows it as the link to share, and uses it for the socket.
-• Browser extras: Web Audio beeps for the buzzer and chimes, toast pop-ups for scores, and the keystroke tracker (start time and backspace count) that is sent with each bluff.
-• If the connection drops mid-game you must refresh: the server forgets a disconnected player's seat.
-Desktop GUI (ui/, Java Swing)
-• MainFrame is the window. It uses a CardLayout to switch between LobbyPanel, Round1BuzzerPanel, Round2BluffPanel, Round3WagerPanel and LeaderboardPanel.
-• GameClient connects to port 5000 and reads server lines on a background thread. Each event is handed to the interface ClientEventListener (implemented by MainFrame) through SwingUtilities.invokeLater, because Swing components may only be changed on the Event Dispatch Thread.
-• Hosting from the GUI starts an embedded GameServer if none is running on port 5000.
-• PlayerSquareWidget draws the four players on the four sides of the screen; UITheme holds colors, fonts and styled buttons.
-QR code (QRCodeGenerator)
-The server answers GET /qr?room=ABCD with a PNG of the link http://<LAN-IP>:8080/?room=ABCD. The encoder is written from scratch: it picks the smallest version that fits (1 to 9), splits the data into Reed-Solomon blocks, writes the format information, tries all 8 mask patterns and keeps the best, then draws the modules with a 4-module white border. A phone that scans it opens the page with the room code already filled in.
-The address comes from NetworkUtils.getLocalIpAddress(), which prefers a private Wi-Fi/LAN address (192.168.x.x, 10.x.x.x, 172.16–31.x.x) over VPN or virtual adapters.
-What was fixed in this update
-Problem
-Cause
-Fix
-Round 2 showed only one option
-Options were sent as text:::risk, but both clients split every message on ::, which cut the list after the first item
-New format text~risk~mine; ~ is stripped from player text so it cannot clash. Fixed in GameServer, app.js and Round2BluffPanel
-Players could vote for their own bluff
-No check
-Own bluff is flagged per player, greyed out in both clients, and refused by the server
-QR code could not be scanned
-The encoder wrote format bits in the wrong place and ignored multi-block Reed-Solomon, so it only worked for the shortest links
-QRCodeGenerator rewritten to the standard; checked by decoding images for six URL lengths
-QR flickered in the lobby
-The image reloaded on every lobby update
-It now reloads only when the room code changes
-Wrong IP in the QR on some PCs
-A VPN or virtual adapter could be chosen
-A private LAN address is preferred
-Name
-Old title "AI Fibbage & Buzzer Showdown"
-Now BLUFF & BUZZ in the page, window, console, batch files and README
-Run, build and troubleshoot
-Run it
-1.  Install Java 11 or newer.
-2.  Double-click run_server.bat. It starts the server and opens http://localhost:8080/ in your browser. The console prints the LAN link and a QR code too.
-3.  In the browser, press Host Game, then share the QR code or link. Friends on the same Wi-Fi scan it, type a name and join.
-4.  When ready, the host presses Start. Empty seats become bots.
-5.  Optional: run_game.bat opens the Swing desktop client instead.
-Change and rebuild: edit files under src/ or web/, then run build.bat. It compiles into bin/ and copies web/ into bin/web/. test_blocks.bat runs the self-tests for blocks 1, 2 and 3.
-Changing questions: edit the QUESTIONS array in DatabaseManager.java (round, category, prompt, correct answer, wrong options joined with |), then rebuild.
-Symptom
-Likely cause and fix
-Phone cannot open the link
-Phone and PC must be on the same Wi-Fi. Allow Java through Windows Firewall for port 8080 (private networks).
-Address already in use
-An earlier server is still running. Close its window, or end the java process, then start again.
-QR opens the wrong address
-Open the page on the PC, read the address under "Share this URL", and type that on the phone.
-"Running embedded in-memory fallback" in the console
-lib/sqlite-jdbc.jar is missing from the class path; scores will not be saved.
-Browser says Disconnected mid-game
-The server forgets you on disconnect; refresh and join a new game.
-Page looks unchanged after editing web/
-Run build.bat, or restart the server. The server reads web/ first, then bin/web/.
-The batch files use Windows class-path separators (;). On Linux or macOS run java -cp "bin:lib/*" com.fibbage.network.GameServer 5000 8080 from the uk folder.
-Questions you may be asked
-Which OOP pillar is where? Encapsulation: Player private fields and validated setters. Abstraction: abstract Player and GameRound. Inheritance: HumanPlayer / AIPlayer extend Player, the three rounds extend GameRound. Polymorphism: each round overrides calculatePoints, and WebSocketClientHandler overrides ClientHandler's send and read.
-How do you stop two players buzzing first? BuzzerController.tryBuzz is synchronized; only the first thread sets the active buzzer and the others get false.
-Why is every GameSession method synchronized? Timers, bots and player messages run on different threads. One lock means the game state changes one step at a time, and the phase check ignores late or duplicate messages.
-Why PreparedStatement? Placeholders (?) keep user input out of the SQL text, which prevents injection, and the driver handles quoting.
-What happens if the SQLite jar is missing? DatabaseManager catches the error and uses an in-memory copy of the questions; the game runs but scores are not saved.
-How do phones join without installing anything? WebServer serves a web page and speaks WebSocket. The QR code holds the link with the room code.
-Why invokeLater in GameClient? Server messages arrive on a background thread, and Swing components must only be touched on the Event Dispatch Thread.
-Is the AI real machine learning? No. The bots use fixed probabilities and random choices; the lie-detector is a hand-written scoring formula over typing time, backspaces and a few word checks. Calling it a "rule-based simulation of a lie-detector" is accurate.
-What stops a player breaking the protocol with :: in their name? GameServer.clean() replaces : | , = ~ with spaces and limits length, and bad messages are caught and ignored instead of crashing the connection.
-What happens when a player disconnects mid-game? The player stays in the game with their score and is skipped when the server waits for answers.
-Ideas for improvement: smarter bots that write question-aware bluffs, a reconnect option, showing who wrote each bluff in the reveal, a real use for ROUND2_AI_FOOLED_BONUS, and a lie-detector that does not give the real answer a separate low score.
+A multiplayer party game for up to 4 players, written in Java. It has a reflex buzzer round, a bluffing round and a final wager round. Players join from a phone or browser by scanning a QR code, or from a Java desktop client. Empty seats are filled by bots.
+
+Features
+Three rounds: Reflex Buzzer, Bluff, and Final Wager
+Join from any phone or browser with a QR code or link, with nothing to install
+Optional Java Swing desktop client
+Bots fill empty seats, up to 4 players
+A rule-based "AI Lie-Detector" that shows a bluff-risk % beside each answer
+SQLite question bank and leaderboard, accessed with plain JDBC
+Built with only the JDK and three jars, no frameworks
+How to run
+
+Requirements: Java 11 or newer, and a Windows PC (the .bat files use Windows paths).
+
+Double-click run_server.bat. This starts the server and opens http://localhost:8080/ in your browser.
+Click Host Game, enter a name and click Create Session.
+Share the QR code or link. Friends on the same Wi-Fi scan it, enter a name and join.
+When everyone is in, the host clicks Start Game. Empty seats become bots.
+
+To use the desktop client, run run_game.bat instead.
+
+Port	Used by
+8080	Browsers and phones (HTTP and WebSocket)
+5000	Desktop Swing clients (TCP)
+
+If a phone can't open the link: both devices must be on the same Wi-Fi, and Windows Firewall must allow Java on port 8080.
+
+How to play
+
+Everyone starts with 1,000 points. The highest score at the end wins.
+
+Round 1: Reflex Buzzer (3 questions). Press BUZZ first, then pick an answer from 4 options.
+
+Round 2: Bluff (2 questions). You see a fact with a blank. Write a believable fake answer. Then everyone sees all the fakes plus the real answer, and votes for the one they think is true. You can't vote for your own bluff, and typing the real answer is rejected.
+
+Round 3: Final Wager (1 question). You see only the category, then secretly bet points, then answer a 4-option question.
+
+Event	Points
+Round 1 correct buzz	+500
+Round 1 wrong buzz	−200, and you're locked out of that question
+Round 1 nobody buzzes	−50 for everyone
+Round 2 vote for the real answer	+500
+Round 2 vote for a fake	−200
+Round 2 someone votes for your fake	+250 per voter
+Round 3 correct	+your bet
+Round 3 wrong	−your bet
+
+A score never goes below 0. A Round 3 bet is at least 100 and never more than you have.
+
+Timers (seconds): Round 1 buzz 20, answer 15, reopened buzzer 13. Round 2 write 35, vote 25. Round 3 wager 20, answer 25. A round ends early when every connected human has acted.
+
+Project structure
+uk/
+├── src/com/fibbage/
+│   ├── model/         Player, HumanPlayer, AIPlayer, Question, GameConstants,
+│   │                  GameRound, RapidFireRound, BluffRound, FinalWagerRound
+│   ├── db/            DatabaseManager (JDBC + SQLite)
+│   ├── concurrency/   BuzzerController, RoundTimer
+│   ├── network/       GameServer, ClientHandler, GameClient, WebServer,
+│   │                  WebSocketClientHandler, NetworkProtocol, NetworkUtils,
+│   │                  QRCodeGenerator
+│   ├── ai/            AILieDetector
+│   └── ui/            MainFrame, LobbyPanel, Round1/2/3 panels,
+│                      LeaderboardPanel, PlayerSquareWidget, UITheme
+├── web/               index.html, style.css, app.js  (browser client)
+├── lib/               sqlite-jdbc.jar, slf4j-api.jar, slf4j-simple.jar
+├── bin/               compiled classes + copy of web/
+├── game.db            SQLite file (created on first run)
+├── build.bat          compile
+├── run_server.bat     start the server
+├── run_game.bat       start the desktop client
+└── test_blocks.bat    run self-tests for blocks 1, 2 and 3
+
+The Java package is com.fibbage, the project's old name. It isn't visible to players.
+
+The five blocks
+OOP. Player and GameRound are abstract. HumanPlayer and AIPlayer extend Player. The three round classes extend GameRound and override calculatePoints. Player keeps its fields private and validates its setters.
+JDBC. DatabaseManager creates the questions and leaderboard tables, loads 21 questions at every start, picks random questions with a PreparedStatement, and saves and reads scores. If the SQLite jar is missing, it falls back to in-memory questions.
+Concurrency. BuzzerController.tryBuzz is synchronized, so only the first buzz wins. RoundTimer uses a ScheduledExecutorService. All game state in GameSession changes under one lock, with a phase check on every message.
+Networking. GameServer accepts TCP clients, with one ClientHandler thread each. WebServer serves the page and upgrades /ws to a WebSocket (RFC 6455, written by hand). WebSocketClientHandler extends ClientHandler, so browsers and desktop clients are handled the same way.
+Swing GUI. MainFrame switches screens with a CardLayout. GameClient reads server messages on a background thread and hands them to the interface through SwingUtilities.invokeLater.
+Network protocol
+
+Each message is plain text: a command or event name, then fields separated by ::. Lists use | between items, , between names and = between a name and a score. Player names and bluffs have : | , = ~ replaced by spaces.
+
+Client to server	Example
+CREATE_SESSION	CREATE_SESSION::Al
+JOIN_SESSION	JOIN_SESSION::K7XZ::Bob
+START_GAME	
+BUZZ, ANSWER_BUZZ	ANSWER_BUZZ::Gold
+SUBMIT_BLUFF	SUBMIT_BLUFF::Cow::3200::1 (text, typing ms, backspaces)
+SUBMIT_VOTE	SUBMIT_VOTE::Year
+SUBMIT_WAGER, SUBMIT_WAGER_ANSWER	SUBMIT_WAGER::400
+
+The server sends events such as LOBBY_UPDATE, ROUND1_QUESTION, BUZZ_LOCKED, ROUND2_VOTE_OPTIONS, ROUND2_REVEAL, ROUND3_REVEAL, SCORES, GAME_OVER and ERROR. The full list is in NetworkProtocol.java.
+
+The Round 2 vote list uses the format text~risk~mine, with items joined by |. For example: Horse~25~0|Cow~58~1. mine=1 marks the bluff you wrote.
+
+Bots and the lie-detector
+
+These are rule-based. They are not machine learning.
+
+Bots buzz after a random 5 to 14 seconds and answer correctly 55% of the time. In Round 2 they pick from a fixed list of silly answers and vote at random. In Round 3 they bet about half their score and answer at random.
+Lie-detector starts at a risk of 40 and adjusts it for backspaces, typing speed per character and a few keywords. The result is clamped to 10–92. The real answer gets a fixed low value between 12 and 35.
+QR code
+
+The server answers GET /qr?room=ABCD with a PNG of http://<LAN-IP>:8080/?room=ABCD. The encoder in QRCodeGenerator.java is written from scratch, with no libraries. It supports byte mode, error-correction level M and versions 1 to 9. The server prefers a private Wi-Fi address (192.168.x.x, 10.x.x.x or 172.16–31.x.x) over VPN or virtual adapters.
+
+Customising
+Questions: edit the QUESTIONS array in DatabaseManager.java. Each row is: round, category, prompt, correct answer, wrong options joined by |. Then run build.bat. For Round 2 only the prompt and the correct answer are used.
+Points, timers, ports: edit GameConstants.java.
+Bot bluffs: edit the FAKE_BLUFFS list in AIPlayer.java.
+
+After any change to src/ or web/, run build.bat. It compiles into bin/ and copies web/ into bin/web/.
+
+To run without the batch files (Linux or macOS), from the uk folder:
+
+java -cp "bin:lib/*" com.fibbage.network.GameServer 5000 8080
+Troubleshooting
+Problem	Fix
+Phone can't open the link	Use the same Wi-Fi as the PC and allow Java through Windows Firewall on port 8080
+Address already in use	An earlier server is still running. Close it and start again
+QR opens the wrong address	Read the address under "Share this URL" on the PC page and type it on the phone
+Console says "embedded in-memory fallback"	lib/sqlite-jdbc.jar is missing from the class path, so scores won't be saved
+Browser shows "Disconnected" mid-game	Refresh and join a new game. The server forgets disconnected players
+Known limitations
+Disconnected web players can't rejoin the same game.
+ROUND2_AI_FOOLED_BONUS is defined in GameConstants.java but not used.
+The lie-detector gives the real answer a separate low risk score, so the truth tends to look lower-risk.
